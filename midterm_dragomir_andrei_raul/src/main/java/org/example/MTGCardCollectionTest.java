@@ -1,346 +1,483 @@
-import java.util.List;
-import java.util.Scanner;
-import java.io.IOException;
+package org.example;
 
+import java.sql.*;
+import java.util.Scanner;
 
 public class MTGCardCollectionTest {
-    private static final String SETTINGS_FILE = "settings.json";
-    private static final String JSON_FILE = "cards.json";
+
+    private static final String DB_URL = "jdbc:sqlite:C:/Users/andrei/IdeaProjects/P3_final1/mtg_card_manager.db";
 
     public static void main(String[] args) {
-        try {
-            SettingsManager settingsManager = new SettingsManager();
-            settingsManager.loadFromFile(SETTINGS_FILE);
-            MessageProvider messageProvider = new MessageProvider(settingsManager.getLanguage());
-
-            Scanner scanner = new Scanner(System.in);
-            
-            System.out.println(messageProvider.getMessage("choose_mode"));
-            while (true) {
-                String mode = scanner.nextLine().trim().toLowerCase();
-                if ("start".equals(mode)) {
-                    runInteractiveMode(scanner, messageProvider, settingsManager);
-                    break;
-                } else if ("settings".equals(mode)) {
-                    runSettingsMode(scanner, messageProvider, settingsManager);
-                    break;
-                } else {
-                    System.out.println(messageProvider.getMessage("invalid_choice"));
-                }
+        try (Connection conn = DriverManager.getConnection(DB_URL)) {
+            if (conn != null) {
+                initializeDatabase(conn);
             }
 
-        } catch (Exception e) {
-            System.out.println("Unexpected error: " + e.getMessage());
+            Scanner scanner = new Scanner(System.in);
+
+            System.out.println("Welcome to the MTG Card Manager!");
+            while (true) {
+                System.out.println("Are you an admin or a user? (admin/user/create_account/exit):");
+                String role = scanner.nextLine().trim().toLowerCase();
+
+                switch (role) {
+                    case "admin":
+                        adminLogin(scanner, conn);
+                        break;
+                    case "user":
+                        userLogin(scanner, conn);
+                        break;
+                    case "create_account":
+                        createAccount(scanner, conn);
+                        break;
+                    case "exit":
+                        System.out.println("Goodbye!");
+                        return;
+                    default:
+                        System.out.println("Invalid choice. Please enter 'admin', 'user', 'create_account', or 'exit'.");
+                }
+            }
+        } catch (SQLException e) {
+            System.out.println("Database connection error: " + e.getMessage());
         }
     }
 
-    private static void runInteractiveMode(Scanner scanner, MessageProvider messageProvider, SettingsManager settingsManager) {
+    private static void initializeDatabase(Connection conn) throws SQLException {
+        String createUsersTableSQL = """
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                password TEXT NOT NULL,
+                role TEXT NOT NULL CHECK (role IN ('admin', 'user'))
+            );
+        """;
+
+        String createCardsTableSQL = """
+            CREATE TABLE IF NOT EXISTS cards (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL,
+                name TEXT NOT NULL,
+                type TEXT NOT NULL,
+                manaCost INTEGER CHECK (manaCost >= 0),
+                rarity TEXT CHECK (rarity IN ('common', 'uncommon', 'rare', 'legendary')),
+                cardSet TEXT,
+                power INTEGER CHECK (power >= 0),
+                toughness INTEGER CHECK (toughness >= 0),
+                effect TEXT,
+                entersTapped BOOLEAN,
+                manaProduced INTEGER CHECK (manaProduced >= 0),
+                favorite BOOLEAN DEFAULT 0,
+                FOREIGN KEY (username) REFERENCES users(username)
+            );
+        """;
+
+        try (Statement stmt = conn.createStatement()) {
+            stmt.execute(createUsersTableSQL);
+            stmt.execute(createCardsTableSQL);
+        }
+    }
+
+    private static void createAccount(Scanner scanner, Connection conn) {
         try {
-            CardCollection cardCollection = new CardCollection();
+            System.out.println("Choose account type to create (admin/user):");
+            String role = validateRole(scanner);
 
-            try {
-                cardCollection.loadFromJSON(JSON_FILE);
-                System.out.println(messageProvider.getMessage("loaded_collection") + JSON_FILE);
-            } catch (Exception e) {
-                System.out.println(messageProvider.getMessage("no_existing_collection"));
+            System.out.println("Enter a username:");
+            String username = validateNonEmptyInput(scanner, "Username cannot be empty. Enter a valid username:");
+
+            System.out.println("Enter a password:");
+            String password = validateNonEmptyInput(scanner, "Password cannot be empty. Enter a valid password:");
+
+            addUser(conn, username, password, role);
+        } catch (SQLException e) {
+            System.out.println("Error creating account: " + e.getMessage());
+        }
+    }
+
+    private static void addUser(Connection conn, String username, String password, String role) throws SQLException {
+        String insertSQL = "INSERT INTO users (username, password, role) VALUES (?, ?, ?);";
+        try (PreparedStatement pstmt = conn.prepareStatement(insertSQL)) {
+            pstmt.setString(1, username);
+            pstmt.setString(2, password);
+            pstmt.setString(3, role);
+            pstmt.executeUpdate();
+            System.out.println(role + " account created successfully for username: " + username);
+        } catch (SQLException e) {
+            if (e.getMessage().contains("UNIQUE")) {
+                System.out.println("Username already exists. Try a different username.");
+            } else {
+                throw e;
             }
+        }
+    }
 
-            System.out.println(settingsManager.getWelcomeMessage());
+    private static void adminLogin(Scanner scanner, Connection conn) throws SQLException {
+        System.out.println("Enter admin username:");
+        String username = validateNonEmptyInput(scanner, "Username cannot be empty. Enter a valid username:");
 
+        System.out.println("Enter admin password:");
+        String password = validateNonEmptyInput(scanner, "Password cannot be empty. Enter a valid password:");
+
+        if (isValidUser(conn, username, password, "admin")) {
+            System.out.println("Admin logged in successfully!");
             while (true) {
-                System.out.println(messageProvider.getMessage("interactive_prompt"));
+                System.out.println("Admin actions: manage_users/view_collections/exit:");
                 String action = scanner.nextLine().trim().toLowerCase();
 
                 switch (action) {
-                    case "view":
-                        viewCollection(cardCollection);
+                    case "manage_users":
+                        manageUsers(scanner, conn);
                         break;
-                    case "add":
-                        addCardFromUserInput(cardCollection, scanner, messageProvider);
-                        cardCollection.saveToJSON(JSON_FILE);
-                        break;
-                    case "remove":
-                        removeCardFromUserInput(cardCollection, scanner, messageProvider);
-                        cardCollection.saveToJSON(JSON_FILE);
-                        break;
-                    case "favorite":
-                        manageFavorites(cardCollection, scanner, messageProvider);
-                        cardCollection.saveToJSON(JSON_FILE);
-                        break;
-                    case "favorites":
-                        viewFavorites(cardCollection);
-                        break;
-                    case "filter":
-                        filterCards(cardCollection, scanner, messageProvider);
+                    case "view_collections":
+                        viewAllCollections(conn);
                         break;
                     case "exit":
-                        System.out.println(messageProvider.getMessage("exiting_program"));
-                        cardCollection.saveToJSON(JSON_FILE);
+                        System.out.println("Logging out as admin...");
                         return;
                     default:
-                        System.out.println(messageProvider.getMessage("invalid_choice"));
+                        System.out.println("Invalid action. Enter 'manage_users', 'view_collections', or 'exit'.");
                 }
             }
-
-        } catch (Exception e) {
-            System.out.println("Unexpected error in interactive mode: " + e.getMessage());
+        } else {
+            System.out.println("Invalid admin credentials.");
         }
     }
 
-    public static void runSettingsMode(Scanner scanner, MessageProvider messageProvider, SettingsManager settingsManager) {
+    private static void manageUsers(Scanner scanner, Connection conn) throws SQLException {
         while (true) {
-            System.out.println(messageProvider.getMessage("settings_menu"));
-            System.out.println(messageProvider.getMessage("language_prompt"));
-            System.out.println(messageProvider.getMessage("startmessage_prompt"));
-            System.out.println(messageProvider.getMessage("default_prompt"));
-            System.out.println(messageProvider.getMessage("start_prompt"));
+            System.out.println("Manage Users: add/remove/view/exit:");
+            String action = scanner.nextLine().trim().toLowerCase();
 
-            String option = scanner.nextLine().trim().toLowerCase();
+            switch (action) {
+                case "add":
+                    System.out.println("Enter new username:");
+                    String username = validateNonEmptyInput(scanner, "Username cannot be empty. Enter a valid username:");
 
-            switch (option) {
-                case "language":
-                    changeLanguage(settingsManager, messageProvider, scanner);
+                    System.out.println("Enter new password:");
+                    String password = validateNonEmptyInput(scanner, "Password cannot be empty. Enter a valid password:");
+
+                    System.out.println("Enter role (admin/user):");
+                    String role = validateRole(scanner);
+
+                    addUser(conn, username, password, role);
                     break;
-                case "startmessage":
-                    updateStartMessage(settingsManager, scanner);
+
+                case "remove":
+                    System.out.println("Enter username to remove:");
+                    String userToRemove = validateNonEmptyInput(scanner, "Username cannot be empty. Enter a valid username:");
+
+                    removeUser(conn, userToRemove);
                     break;
-                case "default":
-                    settingsManager.resetToDefaults();
-                    System.out.println(messageProvider.getMessage("reset_defaults"));
+
+                case "view":
+                    viewUsers(conn);
                     break;
-                case "start":
-                    System.out.println(messageProvider.getMessage("exiting_settings"));
-                    try {
-                        settingsManager.saveToFile(SETTINGS_FILE);
-                    } catch (IOException e) {
-                        System.out.println("Error saving settings: " + e.getMessage());
-                    }
-                    runInteractiveMode(scanner, messageProvider, settingsManager);
+
+                case "exit":
                     return;
+
                 default:
-                    System.out.println(messageProvider.getMessage("invalid_choice"));
+                    System.out.println("Invalid choice. Enter 'add', 'remove', 'view', or 'exit'.");
             }
         }
     }
 
+    private static void removeUser(Connection conn, String username) throws SQLException {
+        String deleteSQL = "DELETE FROM users WHERE username = ?;";
+        try (PreparedStatement pstmt = conn.prepareStatement(deleteSQL)) {
+            pstmt.setString(1, username);
+            int rowsAffected = pstmt.executeUpdate();
+            if (rowsAffected > 0) {
+                System.out.println("User removed successfully.");
+            } else {
+                System.out.println("User not found.");
+            }
+        }
+    }
 
-    private static void changeLanguage(SettingsManager settingsManager, MessageProvider messageProvider, Scanner scanner) {
-        System.out.println(messageProvider.getMessage("enter_language"));
-        String language = scanner.nextLine().trim().toLowerCase();
+    private static void viewUsers(Connection conn) throws SQLException {
+        String query = "SELECT username, role FROM users;";
+        try (Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(query)) {
 
-        if ("english".equals(language) || "romanian".equals(language)) {
-            settingsManager.setLanguage(language);
-            messageProvider.setLanguage(language);
-            System.out.println(messageProvider.getMessage("language_set") + language);
+            System.out.println("Registered Users:");
+            while (rs.next()) {
+                System.out.printf("Username: %s, Role: %s\n", rs.getString("username"), rs.getString("role"));
+            }
+        }
+    }
+
+    private static void viewAllCollections(Connection conn) throws SQLException {
+        String query = "SELECT username, name, type, rarity FROM cards;";
+        try (Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(query)) {
+
+            System.out.println("All User Collections:");
+            while (rs.next()) {
+                System.out.printf("User: %s | Card: %s | Type: %s | Rarity: %s\n",
+                        rs.getString("username"), rs.getString("name"),
+                        rs.getString("type"), rs.getString("rarity"));
+            }
+        }
+    }
+
+    private static void userLogin(Scanner scanner, Connection conn) throws SQLException {
+        System.out.println("Enter username:");
+        String username = validateNonEmptyInput(scanner, "Username cannot be empty. Enter a valid username:");
+
+        System.out.println("Enter password:");
+        String password = validateNonEmptyInput(scanner, "Password cannot be empty. Enter a valid password:");
+
+        if (isValidUser(conn, username, password, "user")) {
+            System.out.println("Login successful! Welcome, " + username);
+            while (true) {
+                System.out.println("Actions: browse/trade/exit:");
+                String action = scanner.nextLine().trim().toLowerCase();
+
+                switch (action) {
+                    case "browse":
+                        browseCollection(conn, username, scanner);
+                        break;
+
+                    case "trade":
+                        tradeCards(conn, username, scanner);
+                        break;
+
+                    case "exit":
+                        System.out.println("Logging out...");
+                        return;
+
+                    default:
+                        System.out.println("Invalid action. Enter 'browse', 'trade', or 'exit'.");
+                }
+            }
         } else {
-            System.out.println(messageProvider.getMessage("invalid_language"));
+            System.out.println("Invalid user credentials.");
         }
     }
 
-    private static void updateStartMessage(SettingsManager settingsManager, Scanner scanner) {
-        System.out.println("Enter a new start message:");
-        String newMessage = scanner.nextLine().trim();
-        settingsManager.setWelcomeMessage(newMessage);
-        System.out.println("Start message updated.");
-    }
-
-    private static void manageFavorites(CardCollection cardCollection, Scanner scanner, MessageProvider messageProvider) {
-        System.out.println(messageProvider.getMessage("mark_favorite"));
-        String cardName = scanner.nextLine().trim();
-
-        for (Card card : cardCollection.getAllCards()) {
-            if (card.getName().equalsIgnoreCase(cardName)) {
-                card.setFavorite(true);
-                System.out.println("Card marked as favorite: " + card.getName());
-                return;
-            }
-        }
-        System.out.println("Card not found: " + cardName);
-    }
-
-    private static void viewFavorites(CardCollection cardCollection) {
-        System.out.println("\n" + new MessageProvider("english").getMessage("view_favorites"));
-        List<Card> favorites = cardCollection.getFavoriteCards();
-
-        if (favorites.isEmpty()) {
-            System.out.println(new MessageProvider("english").getMessage("no_favorites"));
-        } else {
-            for (Card card : favorites) {
-                card.displayCard();
+    private static boolean isValidUser(Connection conn, String username, String password, String role) throws SQLException {
+        String query = "SELECT * FROM users WHERE username = ? AND password = ? AND role = ?;";
+        try (PreparedStatement pstmt = conn.prepareStatement(query)) {
+            pstmt.setString(1, username);
+            pstmt.setString(2, password);
+            pstmt.setString(3, role);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                return rs.next();
             }
         }
     }
 
-    private static void viewCollection(CardCollection cardCollection) {
-        if (cardCollection.getAllCards().isEmpty()) {
-            System.out.println("The collection is empty.");
-            return;
+    private static void browseCollection(Connection conn, String username, Scanner scanner) throws SQLException {
+        while (true) {
+            System.out.println("Browse actions: view/add/remove/favorite/exit:");
+            String action = scanner.nextLine().trim().toLowerCase();
+
+            switch (action) {
+                case "view":
+                    viewUserCollection(conn, username);
+                    break;
+
+                case "add":
+                    addCardToCollection(conn, username, scanner);
+                    break;
+
+                case "remove":
+                    removeCardFromCollection(conn, username, scanner);
+                    break;
+
+                case "favorite":
+                    favoriteCard(conn, username, scanner);
+                    break;
+
+                case "exit":
+                    return;
+
+                default:
+                    System.out.println("Invalid choice. Enter 'view', 'add', 'remove', 'favorite', or 'exit'.");
+            }
         }
-
-        System.out.println("\n+-----------------------------------------+");
-        System.out.println("|             Card Collection             |");
-        System.out.println("+-----------------------------------------+");
-
-        for (Card card : cardCollection.getAllCards()) {
-            card.displayCard();
-        }
-
-        System.out.println("+-----------------------------------------+");
-        System.out.println("|           End of Card Collection        |");
-        System.out.println("+-----------------------------------------+\n");
     }
 
-    private static void addCardFromUserInput(CardCollection cardCollection, Scanner scanner, MessageProvider messageProvider) {
-        System.out.println(messageProvider.getMessage("enter_card_type"));
-        String type = scanner.nextLine().trim().toLowerCase();
-
-        if (!(type.equals("creature") || type.equals("spell") || type.equals("land"))) {
-            System.out.println(messageProvider.getMessage("invalid_card_type"));
-            return;
-        }
-
-        System.out.println(messageProvider.getMessage("enter_card_name"));
-        String name = scanner.nextLine().trim();
-        if (name.isEmpty()) {
-            System.out.println(messageProvider.getMessage("empty_card_name"));
-            return;
-        }
-
-        System.out.println(messageProvider.getMessage("enter_mana_cost"));
-        int manaCost = getValidPositiveInteger(scanner, messageProvider.getMessage("positive_integer_required"));
-
-        System.out.println(messageProvider.getMessage("enter_rarity"));
-        String rarity = scanner.nextLine().trim();
-        if (!(rarity.equalsIgnoreCase("common") || rarity.equalsIgnoreCase("uncommon") ||
-                rarity.equalsIgnoreCase("rare") || rarity.equalsIgnoreCase("mythic"))) {
-            System.out.println(messageProvider.getMessage("invalid_rarity"));
-            return;
-        }
-
-        System.out.println(messageProvider.getMessage("enter_set"));
-        String set = scanner.nextLine().trim();
-        if (set.isEmpty()) {
-            System.out.println(messageProvider.getMessage("empty_set"));
-            return;
-        }
-
-        switch (type) {
-            case "creature":
-                System.out.println(messageProvider.getMessage("enter_power"));
-                int power = getValidPositiveInteger(scanner, messageProvider.getMessage("positive_integer_required"));
-                System.out.println(messageProvider.getMessage("enter_toughness"));
-                int toughness = getValidPositiveInteger(scanner, messageProvider.getMessage("positive_integer_required"));
-                cardCollection.addCard(new CreatureCard(name, manaCost, rarity, set, power, toughness));
-                break;
-
-            case "spell":
-                System.out.println(messageProvider.getMessage("enter_effect"));
-                String effect = scanner.nextLine().trim();
-                if (effect.isEmpty()) {
-                    System.out.println(messageProvider.getMessage("empty_effect"));
+    private static void viewUserCollection(Connection conn, String username) throws SQLException {
+        String query = "SELECT * FROM cards WHERE username = ?;";
+        try (PreparedStatement pstmt = conn.prepareStatement(query)) {
+            pstmt.setString(1, username);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                if (!rs.isBeforeFirst()) {
+                    System.out.println("Your collection is empty.");
                     return;
                 }
-                cardCollection.addCard(new SpellCard(name, manaCost, rarity, set, effect));
-                break;
 
-            case "land":
-                System.out.println(messageProvider.getMessage("enter_tapped"));
-                boolean entersTapped = getValidBoolean(scanner);
-                System.out.println(messageProvider.getMessage("enter_mana_produced"));
-                int manaProduced = getValidInteger(scanner, messageProvider.getMessage("mana_produced_invalid"));
-                if (manaProduced < 1 || manaProduced > 3) {
-                    System.out.println(messageProvider.getMessage("mana_produced_invalid"));
-                    return;
+                System.out.println(username + "'s Card Collection:");
+                while (rs.next()) {
+                    System.out.printf("Card: %s | Type: %s | Mana Cost: %d | Rarity: %s\n",
+                            rs.getString("name"), rs.getString("type"),
+                            rs.getInt("manaCost"), rs.getString("rarity"));
                 }
-                cardCollection.addCard(new LandCard(name, rarity, set, entersTapped, manaProduced));
-                break;
+            }
         }
     }
 
-    private static void removeCardFromUserInput(CardCollection cardCollection, Scanner scanner, MessageProvider messageProvider) {
-        System.out.println(messageProvider.getMessage("enter_card_to_remove"));
-        String name = scanner.nextLine().trim();
+    private static void addCardToCollection(Connection conn, String username, Scanner scanner) throws SQLException {
+        System.out.println("Enter card name:");
+        String name = validateNonEmptyInput(scanner, "Card name cannot be empty. Enter a valid card name:");
 
-        Card removedCard = cardCollection.removeCard(name);
-        if (removedCard != null) {
-            System.out.println(messageProvider.getMessage("card_removed") + name);
-        } else {
-            System.out.println(messageProvider.getMessage("card_not_found") + name);
+        System.out.println("Enter card type (creature/spell/land):");
+        String type = validateCardType(scanner);
+
+        System.out.println("Enter mana cost (non-negative integer):");
+        int manaCost = validateNonNegativeInteger(scanner, "Enter a valid non-negative integer for mana cost:");
+
+        System.out.println("Enter rarity (common/uncommon/rare/legendary):");
+        String rarity = validateRarity(scanner);
+
+        System.out.println("Enter card set:");
+        String cardSet = scanner.nextLine().trim();
+
+        String insertSQL = """
+            INSERT INTO cards (username, name, type, manaCost, rarity, cardSet)
+            VALUES (?, ?, ?, ?, ?, ?);
+        """;
+
+        try (PreparedStatement pstmt = conn.prepareStatement(insertSQL)) {
+            pstmt.setString(1, username);
+            pstmt.setString(2, name);
+            pstmt.setString(3, type);
+            pstmt.setInt(4, manaCost);
+            pstmt.setString(5, rarity);
+            pstmt.setString(6, cardSet);
+            pstmt.executeUpdate();
+            System.out.println("Card added successfully.");
         }
     }
 
-    private static void filterCards(CardCollection cardCollection, Scanner scanner, MessageProvider messageProvider) {
-        System.out.println(messageProvider.getMessage("filter_by"));
-        String filterType = scanner.nextLine().trim().toLowerCase();
+    private static void removeCardFromCollection(Connection conn, String username, Scanner scanner) throws SQLException {
+        System.out.println("Enter card name to remove:");
+        String name = validateNonEmptyInput(scanner, "Card name cannot be empty. Enter a valid card name:");
 
-        switch (filterType) {
-            case "type":
-                System.out.println(messageProvider.getMessage("filter_by_type"));
-                String cardType = scanner.nextLine().trim();
-                List<Card> cardsByType = cardCollection.filter(card -> card.getType().equalsIgnoreCase(cardType));
-                displayFilteredCards(cardsByType);
-                break;
-
-            case "manacost":
-                System.out.println(messageProvider.getMessage("filter_by_mana_cost"));
-                int manaCost = getValidPositiveInteger(scanner, messageProvider.getMessage("positive_integer_required"));
-                List<Card> cardsByManaCost = cardCollection.filter(card -> card.getManaCost() == manaCost);
-                displayFilteredCards(cardsByManaCost);
-                break;
-
-            case "rarity":
-                System.out.println(messageProvider.getMessage("filter_by_rarity"));
-                String rarity = scanner.nextLine().trim();
-                List<Card> cardsByRarity = cardCollection.filter(card -> card.getRarity().equalsIgnoreCase(rarity));
-                displayFilteredCards(cardsByRarity);
-                break;
-
-            default:
-                System.out.println(messageProvider.getMessage("invalid_choice"));
+        String deleteSQL = "DELETE FROM cards WHERE username = ? AND name = ?;";
+        try (PreparedStatement pstmt = conn.prepareStatement(deleteSQL)) {
+            pstmt.setString(1, username);
+            pstmt.setString(2, name);
+            int rowsAffected = pstmt.executeUpdate();
+            if (rowsAffected > 0) {
+                System.out.println("Card removed successfully.");
+            } else {
+                System.out.println("Card not found.");
+            }
         }
     }
 
-    private static void displayFilteredCards(List<Card> cards) {
-        if (cards.isEmpty()) {
-            System.out.println("No cards matched the filter.");
-        } else {
-            cards.forEach(Card::displayCard);
+    private static void favoriteCard(Connection conn, String username, Scanner scanner) throws SQLException {
+        System.out.println("Enter card name to mark as favorite:");
+        String name = validateNonEmptyInput(scanner, "Card name cannot be empty. Enter a valid card name:");
+
+        String updateSQL = "UPDATE cards SET favorite = 1 WHERE username = ? AND name = ?;";
+        try (PreparedStatement pstmt = conn.prepareStatement(updateSQL)) {
+            pstmt.setString(1, username);
+            pstmt.setString(2, name);
+            int rowsAffected = pstmt.executeUpdate();
+            if (rowsAffected > 0) {
+                System.out.println("Card marked as favorite.");
+            } else {
+                System.out.println("Card not found.");
+            }
         }
     }
 
-    private static int getValidPositiveInteger(Scanner scanner, String errorMessage) {
+    private static void tradeCards(Connection conn, String username, Scanner scanner) throws SQLException {
+        System.out.println("Enter the card name you want to trade:");
+        String cardToTrade = validateNonEmptyInput(scanner, "Card name cannot be empty. Enter a valid card name:");
+
+        System.out.println("Enter the username of the user you want to trade with:");
+        String recipient = validateNonEmptyInput(scanner, "Recipient username cannot be empty. Enter a valid username:");
+
+        System.out.println("Enter the card name you want from " + recipient + ":");
+        String cardToReceive = validateNonEmptyInput(scanner, "Card name cannot be empty. Enter a valid card name:");
+
+        String tradeSQL = """
+            UPDATE cards
+            SET username = CASE
+                WHEN name = ? AND username = ? THEN ?
+                WHEN name = ? AND username = ? THEN ?
+                ELSE username
+            END
+            WHERE name IN (?, ?) AND username IN (?, ?);
+        """;
+
+        try (PreparedStatement pstmt = conn.prepareStatement(tradeSQL)) {
+            pstmt.setString(1, cardToTrade);
+            pstmt.setString(2, username);
+            pstmt.setString(3, recipient);
+            pstmt.setString(4, cardToReceive);
+            pstmt.setString(5, recipient);
+            pstmt.setString(6, username);
+            pstmt.setString(7, cardToTrade);
+            pstmt.setString(8, cardToReceive);
+            pstmt.setString(9, username);
+            pstmt.setString(10, recipient);
+
+            int rowsAffected = pstmt.executeUpdate();
+            if (rowsAffected == 2) {
+                System.out.println("Trade successful!");
+            } else {
+                System.out.println("Trade failed. Check card ownership.");
+            }
+        }
+    }
+
+    private static String validateNonEmptyInput(Scanner scanner, String errorMessage) {
+        while (true) {
+            String input = scanner.nextLine().trim();
+            if (!input.isEmpty()) {
+                return input;
+            }
+            System.out.println(errorMessage);
+        }
+    }
+
+    private static String validateRarity(Scanner scanner) {
+        while (true) {
+            String input = scanner.nextLine().trim().toLowerCase();
+            if (input.equals("common") || input.equals("uncommon") || input.equals("rare") || input.equals("legendary")) {
+                return input;
+            }
+            System.out.println("Invalid rarity. Enter 'common', 'uncommon', 'rare', or 'legendary':");
+        }
+    }
+
+    private static String validateCardType(Scanner scanner) {
+        while (true) {
+            String input = scanner.nextLine().trim().toLowerCase();
+            if (input.equals("creature") || input.equals("spell") || input.equals("land")) {
+                return input;
+            }
+            System.out.println("Invalid card type. Enter 'creature', 'spell', or 'land':");
+        }
+    }
+
+    private static int validateNonNegativeInteger(Scanner scanner, String errorMessage) {
         while (true) {
             try {
                 int value = Integer.parseInt(scanner.nextLine().trim());
-                if (value > 0) {
+                if (value >= 0) {
                     return value;
-                } else {
-                    System.out.println(errorMessage);
                 }
             } catch (NumberFormatException e) {
-                System.out.println(errorMessage);
+                // Do nothing, just show error message
             }
+            System.out.println(errorMessage);
         }
     }
 
-    private static int getValidInteger(Scanner scanner, String errorMessage) {
-        while (true) {
-            try {
-                return Integer.parseInt(scanner.nextLine().trim());
-            } catch (NumberFormatException e) {
-                System.out.println(errorMessage);
-            }
-        }
-    }
-
-    private static boolean getValidBoolean(Scanner scanner) {
+    private static String validateRole(Scanner scanner) {
         while (true) {
             String input = scanner.nextLine().trim().toLowerCase();
-            if (input.equals("true") || input.equals("false")) {
-                return Boolean.parseBoolean(input);
-            } else {
-                System.out.println("Please enter 'true' or 'false'.");
+            if (input.equals("admin") || input.equals("user")) {
+                return input;
             }
+            System.out.println("Invalid role. Enter 'admin' or 'user':");
         }
     }
 }
