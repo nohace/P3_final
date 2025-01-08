@@ -1,0 +1,30 @@
+[
+  {
+    "effect": "deal 5 damage",
+    "name": "bolt",
+    "manaCost": 5,
+    "rarity": "common",
+    "set": "ixalan",
+    "favorite": true,
+    "type": "Spell"
+  },
+  {
+    "effect": "counter target spell",
+    "name": "counterspell",
+    "manaCost": 2,
+    "rarity": "rare",
+    "set": "bloomburrow",
+    "favorite": false,
+    "type": "Spell"
+  },
+  {
+    "entersTapped": false,
+    "manaProduced": 1,
+    "name": "test",
+    "manaCost": 0,
+    "rarity": "common",
+    "set": "testtest",
+    "favorite": false,
+    "type": "Land"
+  }
+]
