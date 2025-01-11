@@ -5,7 +5,7 @@ import java.util.Scanner;
 
 public class MTGCardCollectionTest {
 
-    private static final String DB_URL = "jdbc:sqlite:C:/Users/andrei/IdeaProjects/P3_final1/mtg_card_manager.db";
+    private static final String DB_URL = "jdbc:sqlite:C:/Users/andrei/IdeaProjects/P3_final/mtg_card_manager.db";
 
     public static void main(String[] args) {
         try (Connection conn = DriverManager.getConnection(DB_URL)) {

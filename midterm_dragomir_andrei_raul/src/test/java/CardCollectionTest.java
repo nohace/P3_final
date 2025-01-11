@@ -29,7 +29,7 @@ public class CardCollectionTest {
 
         assertEquals(2, collection.getAllCards().size());
 
-        // Use threads to remove cards concurrently
+        // threads to remove cards concurrently
         ExecutorService executor = Executors.newFixedThreadPool(2);
 
         executor.submit(() -> {
